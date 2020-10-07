@@ -1,0 +1,113 @@
+import csv
+import cv2
+import pathlib
+import logging
+import os
+import sys
+from datetime import datetime
+
+
+class ImageDiffer:
+    def __init__(self, inputFile, outputFile):
+        self.inputFile = inputFile
+        self.outputFile = outputFile
+        self.file_info = {}
+        logging.basicConfig(filename='app.log', filemode='w',
+                            format='%(name)s - %(levelname)s - %(message)s')
+
+    def hasValidImageExtension(self, filepath):
+        valid_ext = ['.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif']
+        return filepath.lower().endswith(tuple(valid_ext))
+
+    def getImageDesc(self, filepath):
+        try:
+            image = cv2.imread(filepath)
+        except cv2.error as e:
+            return False, str(e)
+
+        orb = cv2.ORB_create()
+        _, desc = orb.detectAndCompute(image, None)
+        return True, desc
+
+    def sift_sim(self, file_1,file_2):
+        if not self.hasValidImageExtension(file_1) or not os.path.exists(file_1):
+            return False, "Invalid file " + file_1
+        if not self.hasValidImageExtension(file_2) or not os.path.exists(file_2):
+            return False, "Invalid file " + file_2
+
+        if file_1 == file_2:
+            return True, 1.0
+
+        if file_1 in self.file_info:
+            desc_1 = self.file_info[file_1]
+        else:
+           success, desc_1 = self.getImageDesc(file_1)
+           if not success:
+               return desc_1
+        self.file_info[file_1] = desc_1
+
+        if file_2 in self.file_info:
+            desc_2 = self.file_info[file_2]
+        else:
+           success, desc_2 = self.getImageDesc(file_2)
+           if not success:
+               return desc_2
+           self.file_info[file_2] = desc_2
+
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        matches = bf.match(desc_1, desc_2)
+        similar_regions = [i for i in matches if i.distance < 70]
+        if len(matches) == 0:
+            return True, 0.0
+        else:
+            return True, len(similar_regions) / len(matches)
+
+    def similar_value(self, val):
+        assert val >= 0 and val <= 1.0
+        if val == 0.0 or val == 1.0:
+            return 1.0 - val
+        return val
+
+    def process(self):
+        try:
+            row = 1
+            with open(self.inputFile, "r") as file:
+                reader = csv.DictReader(file, delimiter='\t')
+                storeList = []
+                for image_row in reader:
+                    row += 1
+                    print(image_row)
+                    if len(image_row) != 2:
+                        logging.error("Line number " + str(row - 1) + ": has incorrect number of cols")
+                        continue
+
+                    file_1 = image_row['image1']
+                    file_2 = image_row['image2']
+                    startTime = datetime.now().timestamp()
+                    success, msg = self.sift_sim(file_1,file_2)
+                    if not success:
+                        logging.error("Line number " + str(row - 1) + ": " +  msg)
+                        continue
+                    assert isinstance(msg, float)
+                    endTime = datetime.now().timestamp()
+                    elapse = endTime - startTime
+                    tmp_list = []
+                    tmp_list.append(image_row['image1'])
+                    tmp_list.append(image_row['image2'])
+                    tmp_list.append(str(self.similar_value(msg)))
+                    tmp_list.append(str(elapse))
+                    storeList.append(tmp_list)
+
+            with open(self.outputFile, "w") as o:
+                file_writer = csv.writer(o, delimiter='\t')
+                file_writer.writerow(['IMAGE1','IMAGE2','SIMILAR','ELAPSE'])
+                o.writelines('\t'.join(i) + '\n' for i in storeList)
+
+        except FileNotFoundError:
+            print("Oops! No input file to compare")
+
+if __name__ =='__main__':
+    if len(sys.argv) != 3:
+        print ('missing arguments')
+        exit(0)
+                              
